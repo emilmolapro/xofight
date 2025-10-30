@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<meta charset="utf-8"/>
+
+<title>XO Fight</title>
+<style>
+    body { font-family: system-ui; max-width: 520px; margin: 20px auto; }
+    #board { display: grid; grid-template-columns: repeat(3, 100px); gap: 8px; margin: 16px 0; }
+    .cell { width:100px; height:100px; font-size:64px; display:flex; align-items:center; justify-content:center; border:1px solid #ccc; cursor:pointer; }
+    #log { white-space: pre-wrap; background:#f7f7f7; padding:10px; border:1px solid #ddd; height:140px; overflow:auto; }
+</style>
+
+<h1>XO Fight</h1>
+<label>Room ID <input id="room" value=""></label>
+<label>Username <input id="user" value=""></label>
+<button id="join">Join</button>
+<div id="turn"></div>
+<div id="board"></div>
+<div id="log"></div>
+
+<script>
+    const boardElement = document.getElementById('board');
+    const logElement = document.getElementById('log');
+    const turnElement = document.getElementById('turn');
+
+    let socket, roomId, username, board = Array(9).fill("");
+
+    function log(x){
+        //append log lines and autoscroll
+        logElement.textContent += x + "\n"; logElement.scrollTop = logElement.scrollHeight;
+    }
+
+    //intialize board
+    function render(){
+        boardElement.innerHTML = "";
+        board.forEach((v,i)=>{
+            const d = document.createElement('div');
+            d.className = 'cell';
+            d.textContent=v; //show cell content: x, o, empty
+            d.onclick = () => {
+                if(!socket) return; //block moves if it's not this socket's turn
+                socket.send(JSON.stringify({command: "MAKE_MOVE", roomId, username, cell:i})); //else make a move at cell index
+            }
+            boardElement.appendChild(d);
+        })
+    }
+    render(); //call the board function
+
+    //join players
+    document.getElementById('join').onclick = () => {
+        roomId = document.getElementById('room').value.trim();
+        username = document.getElementById('user').value.trim();
+
+        socket = new WebSocket("ws://127.0.0.1:8003/ws");
+        socket.onopen = () => {
+            socket.send(JSON.stringify({command:"JOIN_ROOM", roomId, username}));
+            log("connected");
+
+        }
+        socket.onmessage = (e) => {
+            const msg = JSON.parse(e.data);
+            if(msg.type === "JOINED_ROOM"){
+                log("joined " + msg.roomId + " as " + msg.you);
+                if(msg.matchState){
+                    board = msg.matchState.board; render();
+                    turnElement.textContent = "Turn: " + msg.matchState.turn + " | Status: " + msg.matchState.status;
+                    //note to self: msg.turn cannot be accessed upon joining since its part of
+                    //another json item. join room item -> matchState item -> contents
+                }
+            }
+            else if(msg.type === "PLAYER_JOINED"){
+                log("player joined: " + msg.username)
+            }
+            else if(msg.type === "BOARD_UPDATE"){
+                board = msg.board; render();
+                turnElement.textContent = "Turn: " +  msg.turn + " | Status: " + msg.status;
+            }
+            else if(msg.type === "ROUND_END"){
+                board = msg.board; render();
+                turnElement.textContent = "Round end: " + (msg.result === "DRAW" ? "DRAW" : ("Winner: " + msg.winner));
+                log("score: " + JSON.stringify(msg.score))
+            }
+            else if(msg.type === "ERROR"){
+                log("ERROR: " + msg.error);
+            }
+            else{
+                //catch any error i haven't thought of
+                log("MESSAGE: " + e.data)
+            }
+        }
+        socket.onerror = (e) => log("socket error");
+        socket.onclose = () => log("socket closed");
+    }
+</script>
